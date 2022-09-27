@@ -1,0 +1,98 @@
+#!/bin/sh
+
+#######################################
+# Show information message.
+# Globals:
+#   None
+# Arguments:
+#   Message to print
+# Outputs:
+#   Writes information to stdout
+#######################################
+function info() {
+  msg="${1}"
+  if [ ${VERBOSE} -eq 1 ]; then
+    echo -e "\e[36m[$(date +'%Y-%m-%dT%H:%M:%S%z')][INFO]  ${msg}\e[0m"
+  fi
+}
+
+#######################################
+# Show success message.
+# Globals:
+#   None
+# Arguments:
+#   Message to print
+# Outputs:
+#   Writes success message to stdout
+#######################################
+function success() {
+  msg="${1}"
+  echo -e "\e[32m[$(date -u +'%Y-%m-%dT%H:%M:%S%z')][OK]    ${msg}\e[0m"
+}
+
+#######################################
+# Show warning message.
+# Globals:
+#   None
+# Arguments:
+#   Message to print
+# Outputs:
+#   Writes warning to stdout
+#######################################
+function warn() {
+  msg="${1}"
+  echo -e "\e[33m[$(date +'%Y-%m-%dT%H:%M:%S%z')][WARN]  ${msg}\e[0m"
+}
+
+#######################################
+# Show error message and exit the script.
+# Globals:
+#   None
+# Arguments:
+#   Message to print
+# Outputs:
+#   Writes error message to stderr
+#######################################
+function err() {
+  msg="${1}"
+  echo -e "\e[31m[$(date -u +'%Y-%m-%dT%H:%M:%S%z')][ERROR] ${msg}, terminating...\e[0m"  >&2
+  exit 1
+}
+
+# VERBOSE will display extra informations
+if [ "${VERBOSE}" = "0" ] || [ "${VERBOSE}" = "false" ] || [ "${VERBOSE}" = "" ]; then
+  VERBOSE=0
+elif [ "${VERBOSE}" = "1" ] || [ "${VERBOSE}" = "true" ]; then
+  VERBOSE=1
+fi
+
+CERTS_DIR="${CERTS_DIR:-/certs}"
+
+# Set timezone with TZ setting
+if [ "${TZ}" = "" ]; then
+  no_timezone=1
+  TZ="UTC"
+elif [ ! -f "/usr/share/zoneinfo/${TZ}" ]; then
+  wrong_timezone="${TZ}"
+  TZ="UTC"
+fi
+if [ "${no_timezone}" = "1" ] || [ "${wrong_timezone}" != "" ]; then
+  if [ ! -f "/etc/timezone" ] || [ "$(cat /etc/timezone)" != "${TZ}" ] ; then
+    cp /usr/share/zoneinfo/${TZ} /etc/localtime
+    echo "${TZ}" > /etc/timezone
+  fi
+fi
+if [ "${no_timezone}" = "1" ]; then
+  info "Using default value (UTC) for TZ (timezone) setting"
+elif [ "${wrong_timezone}" != "" ]; then
+  warn "Unsupported timezone given (${wrong_timezone}), using default value (UTC) instead"
+else
+  info "Timezone is \"${TZ}\""
+fi
+
+certmaker
+
+# Fix certificates ownership
+if [ "${PUID}" != "" ] && [ "${PGID}" != "" ]; then
+    chown -R ${PUID}:${PGID} ${CERTS_DIR}/*
+fi

@@ -1,0 +1,1047 @@
+#!/bin/sh
+#
+# Generate certificates with ease: signed by a self-signed/provided Certification Autoriy or basic (self-signed) certificates.
+
+VERSION="certmaker version 0.0.1 (pre-release)"
+
+HELP="
+Usage:  certmaker [OPTIONS]
+
+Generate certificates with ease: signed by a self-signed/provided Certification Autoriy or basic (self-signed) certificates.
+
+Options:
+  -h, --help                  Print this menu and quit
+  -v, --version                Print version information and quit
+  -a, --domain string          Domain(s) to sign certificates for
+  -w, --no-wilcard             Disable wildcards globally for generated certificates
+  -y, --no-self-signed-ca      Disable self-signed CA
+  -x, --no-provided-ca         Disable provided (non-generated) CA
+  -u, --basic-certs            Enable basic certificates generation (not signed by a CA)
+  -M, --ca-duration string     Define CA validity duration (in days)
+  -m, --cert-duration string   Define certificates duration (in days)
+  -U, --no-fallback-options    Disable options (subject) fallback from CA over certificate if missing (or the opposite)
+  -V, --verbose                Show verbose informations
+  -K, --force-ca-renewal       Force CA renewal if available
+  -Y, --force-cert-renewal     Force domain(s) certificates renewal if available
+  -X, --force-renewal      Force CA and domain(s) certificates renewal if available
+
+Certification Authority (CA) subject options, superseeded by existing CA (if any):
+  -Z, --ca-subject string                Complete subject (superseeded by individual settings)
+  -C, --ca-country string                Country (Two letters country code)
+  -O, --ca-organization string           Organization
+  -N, --ca-organizational-unit string    Organizational-unit
+  -D, --ca-dn-qualifier string           Distinguished name qualifier
+  -S, --ca-state string                  State or province name
+  -B, --ca-common-name string            Common name
+  -R, --ca-serial string                 Serial number
+  -L, --ca-locality string               Locality
+  -T, --ca-title string                  Title
+  -Q, --ca-surname string                Surname
+  -G, --ca-given-name string             Given name
+  -I, --ca-initials string               Initials
+  -P, --ca-pseudonym string              Pseudonym
+  -F, --ca-generation-qualifier string   Generation qualifier
+  -E, --ca-email string                  Email
+
+Generated certificates subject options, superseeded by existing certificates (if they need renewall):
+  -z, --cert-subject string                Complete subject (superseeded by individual settings)
+  -c, --cert-country string                Country (Two letters country code)
+  -o, --cert-organization string           Organization
+  -n, --cert-organizational-unit string    Organizational-unit
+  -d, --cert-dn-qualifier string           Distinguished name qualifier
+  -s, --cert-state string                  State or province name
+  -b, --cert-common-name string            Common name
+  -r, --cert-serial string                 Serial number
+  -l, --cert-locality string               Locality
+  -t, --cert-title string                  Title
+  -q, --cert-surname string                Surname
+  -g, --cert-given-name string             Given name
+  -i, --cert-initials string               Initials
+  -p, --cert-pseudonym string              Pseudonym
+  -f, --cert-generation-qualifier string   Generation qualifier
+  -e, --cert-email string                  Email
+
+For extended documentation, please head over https://github.com/Moukrea/certmaker/README.md
+"
+
+#######################################
+# Show information message.
+# Globals:
+#   None
+# Arguments:
+#   Message to print
+# Outputs:
+#   Writes information to stdout
+#######################################
+function info() {
+  msg="${1}"
+  if [ ${VERBOSE} -eq 1 ]; then
+    echo -e "\e[36m[$(date +'%Y-%m-%dT%H:%M:%S%z')][INFO]  ${msg}\e[0m"
+  fi
+}
+
+#######################################
+# Show success message.
+# Globals:
+#   None
+# Arguments:
+#   Message to print
+# Outputs:
+#   Writes success message to stdout
+#######################################
+function success() {
+  msg="${1}"
+  echo -e "\e[32m[$(date -u +'%Y-%m-%dT%H:%M:%S%z')][OK]    ${msg}\e[0m"
+}
+
+#######################################
+# Show warning message.
+# Globals:
+#   None
+# Arguments:
+#   Message to print
+# Outputs:
+#   Writes warning to stdout
+#######################################
+function warn() {
+  msg="${1}"
+  echo -e "\e[33m[$(date +'%Y-%m-%dT%H:%M:%S%z')][WARN]  ${msg}\e[0m"
+}
+
+#######################################
+# Show error message and exit the script.
+# Globals:
+#   None
+# Arguments:
+#   Message to print
+# Outputs:
+#   Writes error message to stderr
+#######################################
+function err() {
+  msg="${1}"
+  echo -e "\e[31m[$(date -u +'%Y-%m-%dT%H:%M:%S%z')][ERROR] ${msg}, terminating...\e[0m"  >&2
+  exit 1
+}
+
+#######################################
+# Parse given subject for/from certs/CA to set certs/CA subject related variables.
+# Globals:
+#   CERT_COUNTRY
+#   CERT_STATE
+#   CERT_LOCALITY
+#   CERT_ORGANIZATION
+#   CERT_ORGANIZATIONAL_UNIT
+#   CERT_EMAIL
+#   CERT_COMMON_NAME
+#   CERT_DN_QUALIFIER
+#   CERT_SERIAL
+#   CERT_TITLE
+#   CERT_SURNAME
+#   CERT_GIVEN_NAME
+#   CERT_INITIALS
+#   CERT_PSEUDONYM
+#   CERT_GENERATION_QUALIFIER
+#   CA_COUNTRY
+#   CA_STATE
+#   CA_LOCALITY
+#   CA_ORGANIZATION
+#   CA_ORGANIZATIONAL_UNIT
+#   CA_EMAIL
+#   CA_COMMON_NAME
+#   CA_DN_QUALIFIER
+#   CA_SERIAL
+#   CA_TITLE
+#   CA_SURNAME
+#   CA_GIVEN_NAME
+#   CA_INITIALS
+#   CA_PSEUDONYM
+#   CA_GENERATION_QUALIFIER
+#   _COUNTRY
+#   _STATE
+#   _LOCALITY
+#   _ORGANIZATION
+#   _ORGANIZATIONAL_UNIT
+#   _EMAIL
+#   _COMMON_NAME
+#   _DN_QUALIFIER
+#   _SERIAL
+#   _TITLE
+#   _SURNAME
+#   _GIVEN_NAME
+#   _INITIALS
+#   _PSEUDONYM
+#   _GENERATION_QUALIFIER
+# Arguments:
+#   Type of subject to parse (ca/cert)
+#   Subject as a string
+# Outputs:
+#   None
+#######################################
+function parse_subject() {
+  type="${1}"
+  subject="${2}"
+
+  if [ "$(echo "${subject}" | grep "/")" != "" ] && [ "$(echo "${subject}" | grep ",")" = "" ]; then
+    _COUNTRY=$(echo "${subject}" | grep -e '[countryName\|C]'  | sed -e 's#.*/C=\(.*\)#\1#' | sed -e 's#.*/countryName=\(.*\)#\1#' | sed -e 's#/.*##')
+    _STATE=$(echo "${subject}" | grep -e '[stateOrProvinceName\|ST]' | sed -e 's#.*/ST=\(.*\)#\1#' | sed -e 's#.*/stateOrProvinceName=\(.*\)#\1#' | sed -e 's#/.*##')
+    _LOCALITY=$(echo "${subject}" | grep -e '[locality\|L]' | sed -e 's#.*/L=\(.*\)#\1#' | sed -e 's#.*/locality=\(.*\)#\1#' | sed -e 's#/.*##')
+    _ORGANIZATION=$(echo "${subject}" | grep -e '[organizationName \|O]' | sed -e 's#.*/O=\(.*\)#\1#' | sed -e 's#.*/organizationName=\(.*\)#\1#' | sed -e 's#/.*##')
+    _ORGANIZATIONAL_UNIT=$(echo "${subject}" | grep -e '[organizationalUnitName\|OU]' | sed -e 's#.*/OU=\(.*\)#\1#' | sed -e 's#.*/organizationalUnitName=\(.*\)#\1#' | sed -e 's#/.*##')
+    _EMAIL=$(echo "${subject}" | grep -e 'emailAddress' | sed -e 's#.*/emailAddress=\(.*\)#\1#' | sed -e 's#/.*##')
+    _COMMON_NAME=$(echo "${subject}" | grep -e '[commonName\|CN]' | sed -e 's#.*/CN=\(.*\)#\1#' | sed -e 's#.*/commonName=\(.*\)#\1#' | sed -e 's#/.*##')
+    _DN_QUALIFIER=$(echo "${subject}" | grep -e 'dnQualifier' | sed -e 's#.*/dnQualifier=\(.*\)#\1#' | sed -e 's#/.*##')
+    _SERIAL=$(echo "${subject}" | grep -e 'serialNumber' | sed -e 's#.*/serialNumber=\(.*\)#\1#' | sed -e 's#/.*##')
+    _TITLE=$(echo "${subject}" | grep -e 'title' | sed -e 's#.*/title=\(.*\)#\1#' | sed -e 's#/.*##')
+    _SURNAME=$(echo "${subject}"| grep -e '[surname \|SN ]' | sed -e 's#.*/SN=\(.*\)#\1#' | sed -e 's#.*/surname=\(.*\)#\1#' | sed -e 's#/.*##')
+    _GIVEN_NAME=$(echo "${subject}" | grep -e '[givenName\|GN ]' | sed -e 's#.*/GN=\(.*\)#\1#' | sed -e 's#.*/givenName=\(.*\)#\1#' | sed -e 's#/.*##')
+    _INITIALS=$(echo "${subject}" | grep -e 'initials' | sed -e 's#.*/initials=\(.*\)#\1#' | sed -e 's#/.*##')
+    _PSEUDONYM=$(echo "${subject}" | grep -e 'pseudonym' | sed -e 's#.*/pseudonym=\(.*\)#\1#' | sed -e 's#/.*##')
+    _GENERATION_QUALIFIER=$(echo "${subject}" | grep -e 'generationQualifier' | sed -e 's#.*/generationQualifier=\(.*\)#\1#' | sed -e 's#/.*##')
+  else
+    _COUNTRY=$(echo "${subject}" | grep -e ' C ' | sed -e 's#.*C = \(.*\).*#\1#' | sed -e 's#, .*##')
+    _STATE=$(echo "${subject}" | grep -e ' ST ' | sed -e 's#.*ST = \(.*\).*#\1#' | sed -e 's#, .*##')
+    _LOCALITY=$(echo "${subject}" | grep -e ' L ' | sed -e 's#.*L = \(.*\).*#\1#' | sed -e 's#, .*##')
+    _ORGANIZATION=$(echo "${subject}" | grep -e ' O ' | sed -e 's#.*O = \(.*\).*#\1#' | sed -e 's#, .*##')
+    _ORGANIZATIONAL_UNIT=$(echo "${subject}" | grep -e ' OU ' | sed -e 's#.*OU = \(.*\).*#\1#' | sed -e 's#, .*##')
+    _EMAIL=$(echo "${subject}" | grep -e ' emailAddress ' | sed -e 's#.*emailAddress = \(.*\).*#\1#' | sed -e 's#, .*##')
+    _COMMON_NAME=$(echo "${subject}" | grep -e ' CN ' | sed -e 's#.*CN = \(.*\).*#\1#' | sed -e 's#, .*##')
+    _DN_QUALIFIER=$(echo "${subject}" | grep -e ' dnQualifier ' | sed -e 's#.*dnQualifier = \(.*\).*#\1#' | sed -e 's#, .*##')
+    _SERIAL=$(echo "${subject}" | grep -e ' serialNumber ' | sed -e 's#.*serialNumber = \(.*\).*#\1#' | sed -e 's#, .*##')
+    _TITLE=$(echo "${subject}" | grep -e ' title ' | sed -e 's#.*title = \(.*\).*#\1#' | sed -e 's#, .*##')
+    _SURNAME=$(echo "${subject}" | grep -e ' SN ' | sed -e 's#.*SN = \(.*\).*#\1#' | sed -e 's#, .*##')
+    _GIVEN_NAME=$(echo "${subject}" | grep -e ' GN ' | sed -e 's#.*GN = \(.*\).*#\1#' | sed -e 's#, .*##')
+    _INITIALS=$(echo "${subject}" | grep -e ' initials ' | sed -e 's#.*initials = \(.*\).*#\1#' | sed -e 's#, .*##')
+    _PSEUDONYM=$(echo "${subject}" | grep -e ' pseudonym ' | sed -e 's#.*pseudonym = \(.*\).*#\1#' | sed -e 's#, .*##')
+    _GENERATION_QUALIFIER=$(echo "${subject}" | grep -e 'generationQualifier' | sed -e 's#.*generationQualifier = \(.*\).*#\1#' | sed -e 's#, .*##')
+  fi
+
+  if [ "${type}" = "cert" ]; then
+    refresh_cert_subject
+  elif [ "${type}" = "ca" ]; then
+    if [ "${_COUNTRY}" != "" ]; then CA_COUNTRY="${_COUNTRY}"; fi
+    if [ "${_STATE}" != "" ]; then CA_STATE="${_STATE}"; fi
+    if [ "${_LOCALITY}" != "" ]; then CA_LOCALITY="${_LOCALITY}"; fi
+    if [ "${_ORGANIZATION}" != "" ]; then CA_ORGANIZATION="${_ORGANIZATION}"; fi
+    if [ "${_ORGANIZATIONAL_UNIT}" != "" ]; then CA_ORGANIZATIONAL_UNIT="${_ORGANIZATIONAL_UNIT}"; fi
+    if [ "${_EMAIL}" != "" ]; then CA_EMAIL="${_EMAIL}"; fi
+    if [ "${_COMMON_NAME}" != "" ]; then CA_COMMON_NAME="${_COMMON_NAME}"; fi
+    if [ "${_DN_QUALIFIER}" != "" ]; then CA_DN_QUALIFIER="${_DN_QUALIFIER}"; fi
+    if [ "${_SERIAL}" != "" ]; then CA_SERIAL="${_SERIAL}"; fi
+    if [ "${_TITLE}" != "" ]; then CA_TITLE="${_TITLE}"; fi
+    if [ "${_SURNAME}" != "" ]; then CA_SURNAME="${_SURNAME}"; fi
+    if [ "${_GIVEN_NAME}" != "" ]; then CA_GIVEN_NAME="${_GIVEN_NAME}"; fi
+    if [ "${_INITIALS}" != "" ]; then CA_INITIALS="${_INITIALS}"; fi
+    if [ "${_PSEUDONYM}" != "" ]; then CA_PSEUDONYM="${_PSEUDONYM}"; fi
+    if [ "${_GENERATION_QUALIFIER}" != "" ]; then CA_GENERATION_QUALIFIER="${_GENERATION_QUALIFIER}"; fi
+  else
+    err "Unsupported subject type (${type}), allowed values are \"ca\" and \"cert\""
+  fi
+}
+
+#######################################
+# Refresh certificate subject variables if any of the values have been overrid.
+# Globals:
+#   _COUNTRY
+#   _STATE
+#   _LOCALITY
+#   _ORGANIZATION
+#   _ORGANIZATIONAL_UNIT
+#   _EMAIL
+#   _COMMON_NAME
+#   _DN_QUALIFIER
+#   _SERIAL
+#   _TITLE
+#   _SURNAME
+#   _GIVEN_NAME
+#   _INITIALS
+#   _PSEUDONYM
+#   _GENERATION_QUALIFIER
+# Arguments:
+#   None
+# Outputs:
+#   None
+#######################################
+function refresh_cert_subject() {
+  CERT_COUNTRY="${CERT_COUNTRY_ORIG}"
+  CERT_STATE="${CERT_STATE_ORIG}"
+  CERT_LOCALITY_LOCALITY="${CERT_LOCALITY_ORIG}"
+  CERT_ORGANIZATION="${CERT_ORGANIZATION_ORIG}"
+  CERT_ORGANIZATIONAL_UNIT="${CERT_ORGANIZATIONAL_UNIT_ORIG}"
+  CERT_EMAIL="${CERT_EMAIL_ORIG}"
+  CERT_COMMON_NAME="${CERT_COMMON_NAME_ORIG}"
+  CERT_DN_QUALIFIER="${CERT_DN_QUALIFIER_ORIG}"
+  CERT_SERIAL="${CERT_SERIAL_ORIG}"
+  CERT_TITLE="${CERT_TITLE_ORIG}"
+  CERT_SURNAME="${CERT_SURNAME_ORIG}"
+  CERT_GIVEN_NAME="${CERT_GIVEN_NAME_ORIG}"
+  CERT_INITIALS="${CERT_INITIALS_ORIG}"
+  CERT_PSEUDONYM="${CERT_PSEUDONYM_ORIG}"
+  CERT_GENERATION_QUALIFIER="${CERT_GENERATION_QUALIFIER_ORIG}"
+
+  if [ "${_COUNTRY}" != "" ]; then CERT_COUNTRY="${_COUNTRY}"; fi
+  if [ "${_STATE}" != "" ]; then CERT_STATE="${_STATE}"; fi
+  if [ "${_LOCALITY}" != "" ]; then CERT_LOCALITY="${_LOCALITY}"; fi
+  if [ "${_ORGANIZATION}" != "" ]; then CERT_ORGANIZATION="${_ORGANIZATION}"; fi
+  if [ "${_ORGANIZATIONAL_UNIT}" != "" ]; then CERT_ORGANIZATIONAL_UNIT="${_ORGANIZATIONAL_UNIT}"; fi
+  if [ "${_EMAIL}" != "" ]; then CERT_EMAIL="${_EMAIL}"; fi
+  if [ "${_COMMON_NAME}" != "" ]; then CERT_COMMON_NAME="${_COMMON_NAME}"; fi
+  if [ "${_DN_QUALIFIER}" != "" ]; then CERT_DN_QUALIFIER="${_DN_QUALIFIER}"; fi
+  if [ "${_SERIAL}" != "" ]; then CERT_SERIAL="${_SERIAL}"; fi
+  if [ "${_TITLE}" != "" ]; then CERT_TITLE="${_TITLE}"; fi
+  if [ "${_SURNAME}" != "" ]; then CERT_SURNAME="${_SURNAME}"; fi
+  if [ "${_GIVEN_NAME}" != "" ]; then CERT_GIVEN_NAME="${_GIVEN_NAME}"; fi
+  if [ "${_INITIALS}" != "" ]; then CERT_INITIALS="${_INITIALS}"; fi
+  if [ "${_PSEUDONYM}" != "" ]; then CERT_PSEUDONYM="${_PSEUDONYM}"; fi
+  if [ "${_GENERATION_QUALIFIER}" != "" ]; then CERT_GENERATION_QUALIFIER="${_GENERATION_QUALIFIER}"; fi
+}
+
+#######################################
+# Set default values for both CA and certs subjects, filling up mandatory variables.
+# Globals:
+#   FALLBACK_OPTIONS
+#   CERT_COUNTRY
+#   CERT_STATE
+#   CERT_LOCALITY
+#   CERT_ORGANIZATION
+#   CERT_ORGANIZATIONAL_UNIT
+#   CERT_EMAIL
+#   CERT_COMMON_NAME
+#   CERT_DN_QUALIFIER
+#   CERT_SERIAL
+#   CERT_TITLE
+#   CERT_SURNAME
+#   CERT_GIVEN_NAME
+#   CERT_INITIALS
+#   CERT_PSEUDONYM
+#   CERT_GENERATION_QUALIFIER
+#   CA_COUNTRY
+#   CA_STATE
+#   CA_LOCALITY
+#   CA_ORGANIZATION
+#   CA_ORGANIZATIONAL_UNIT
+#   CA_EMAIL
+#   CA_COMMON_NAME
+#   CA_DN_QUALIFIER
+#   CA_SERIAL
+#   CA_TITLE
+#   CA_SURNAME
+#   CA_GIVEN_NAME
+#   CA_INITIALS
+#   CA_PSEUDONYM
+#   CA_GENERATION_QUALIFIER
+# Arguments:
+#   None
+# Outputs:
+#   Informations (logs) about variables definitions
+#######################################
+function set_defaults() {
+  # Handle CA_COUNTRY and CERT_COUNTRY (mandatory variables)
+  if [ "${CA_COUNTRY}" = "" ] && [ "${CERT_COUNTRY}" = "" ]; then
+    CA_COUNTRY="AU"
+    CERT_COUNTRY="AU"
+    info "Using default values (AU) for CA_COUNTRY and CERT_COUNTRY."
+  elif [ "${CA_COUNTRY}" = "" ] && [ "${CERT_COUNTRY}" != "" ] && [ ${FALLBACK_OPTIONS} -eq 1 ]; then
+    CA_COUNTRY="${CERT_COUNTRY}"
+    info "CA_COUNTRY defined from CERT_COUNTRY (${CERT_COUNTRY})."
+  elif [ "${CA_COUNTRY}" != "" ] && [ "${CERT_COUNTRY}" = "" ] && [ ${FALLBACK_OPTIONS} -eq 1 ]; then
+    CERT_COUNTRY="${CA_COUNTRY}"
+    info "CERT_COUNTRY defined from CA_COUNTRY (${CA_COUNTRY})."
+  fi
+
+  # Handle CA_STATE and CERT_STATE (mandatory variables)
+  if [ "${CA_STATE}" = "" ] && [ "${CERT_STATE}" = "" ]; then
+    CA_STATE="Some-State"
+    CERT_STATE="Some-State"
+    info "Using default values (Some-State) for CA_STATE and CERT_STATE."
+  elif [ "${CA_STATE}" = "" ] && [ "${CERT_STATE}" != "" ] && [ ${FALLBACK_OPTIONS} -eq 1 ]; then
+    CA_STATE="${CERT_STATE}"
+    info "CA_STATE defined from CERT_STATE (${CERT_STATE})."
+  elif [ "${CA_STATE}" != "" ] && [ "${CERT_STATE}" = "" ] && [ ${FALLBACK_OPTIONS} -eq 1 ]; then
+    CERT_STATE="${CA_STATE}"
+    info "CERT_STATE defined from CA_STATE (${CA_STATE})."
+  fi
+
+  if [ "${CA_LOCALITY}" = "" ] && [ "${CERT_LOCALITY}" != "" ] && [ ${FALLBACK_OPTIONS} -eq 1 ]; then
+    CA_LOCALITY="${CERT_LOCALITY}"
+    info "CA_LOCALITY defined from CERT_LOCALITY (${CERT_LOCALITY})."
+  elif [ "${CA_LOCALITY}" != "" ] && [ "${CERT_LOCALITY}" = "" ] && [ ${FALLBACK_OPTIONS} -eq 1 ]; then
+    CERT_LOCALITY="${CA_LOCALITY}"
+    info "CERT_LOCALITY defined from CA_LOCALITY (${CA_LOCALITY})."
+  fi
+
+  # Handle CA_ORGANIZATION and CERT_ORGANIZATION (mandatory variables)
+  if [ "${CA_ORGANIZATION}" = "" ] && [ "${CERT_ORGANIZATION}" = "" ]; then
+    CA_ORGANIZATION="Internet Widgits Pty Ltd"
+    CERT_ORGANIZATION="Internet Widgits Pty Ltd"
+    info "Using default values (Internet Widgits Pty Ltd) for CA_ORGANIZATION and CERT_ORGANIZATION."
+  elif [ "${CA_ORGANIZATION}" = "" ] && [ "${CERT_ORGANIZATION}" != "" ] && [ ${FALLBACK_OPTIONS} -eq 1 ]; then
+    CA_ORGANIZATION="${CERT_ORGANIZATION}"
+    info "CA_ORGANIZATION defined from CERT_ORGANIZATION (${CERT_ORGANIZATION})."
+  elif [ "${CA_ORGANIZATION}" != "" ] && [ "${CERT_ORGANIZATION}" = "" ] && [ ${FALLBACK_OPTIONS} -eq 1 ]; then
+    CERT_ORGANIZATION="${CA_ORGANIZATION}"
+    info "CERT_ORGANIZATION defined from CA_ORGANIZATION (${CA_ORGANIZATION})."
+  fi
+
+  if [ "${CA_ORGANIZATIONAL_UNIT}" = "" ] && [ "${CERT_ORGANIZATIONAL_UNIT}" != "" ] && [ ${FALLBACK_OPTIONS} -eq 1 ]; then
+    CA_ORGANIZATIONAL_UNIT="${CERT_ORGANIZATIONAL_UNIT}"
+    info "CA_ORGANIZATIONAL_UNIT defined from CERT_ORGANIZATIONAL_UNIT (${CERT_ORGANIZATIONAL_UNIT})."
+  elif [ "${CA_ORGANIZATIONAL_UNIT}" != "" ] && [ "${CERT_ORGANIZATIONAL_UNIT}" = "" ] && [ ${FALLBACK_OPTIONS} -eq 1 ]; then
+    CERT_ORGANIZATIONAL_UNIT="${CA_ORGANIZATIONAL_UNIT}"
+    info "CERT_ORGANIZATIONAL_UNIT defined from CA_ORGANIZATIONAL_UNIT (${CA_ORGANIZATIONAL_UNIT})."
+  fi
+
+  if [ "${CA_EMAIL}" = "" ] && [ "${CERT_EMAIL}" != "" ] && [ ${FALLBACK_OPTIONS} -eq 1 ]; then
+    CA_EMAIL="${CERT_EMAIL}"
+    info "CA_EMAIL defined from CERT_EMAIL (${CERT_EMAIL})."
+  elif [ "${CA_EMAIL}" != "" ] && [ "${CERT_EMAIL}" = "" ] && [ ${FALLBACK_OPTIONS} -eq 1 ]; then
+    CERT_EMAIL="${CA_EMAIL}"
+    info "CERT_EMAIL defined from CA_EMAIL (${CA_EMAIL})."
+  fi
+
+  if [ "${CA_COMMON_NAME}" = "" ] && [ "${CERT_COMMON_NAME}" != "" ] && [ ${FALLBACK_OPTIONS} -eq 1 ]; then
+    CA_COMMON_NAME="${CERT_COMMON_NAME}"
+    info "CA_COMMON_NAME defined from CERT_COMMON_NAME (${CERT_COMMON_NAME})."
+  elif [ "${CA_COMMON_NAME}" != "" ] && [ "${CERT_COMMON_NAME}" = "" ] && [ ${FALLBACK_OPTIONS} -eq 1 ]; then
+    CERT_COMMON_NAME="${CA_COMMON_NAME}"
+    info "CERT_COMMON_NAME defined from CA_COMMON_NAME (${CA_COMMON_NAME})."
+  fi
+
+  if [ "${CA_DN_QUALIFIER}" = "" ] && [ "${CERT_DN_QUALIFIER}" != "" ] && [ ${FALLBACK_OPTIONS} -eq 1 ]; then
+    CA_DN_QUALIFIER="${CERT_DN_QUALIFIER}"
+    info "CA_DN_QUALIFIER defined from CERT_DN_QUALIFIER (${CERT_DN_QUALIFIER})."
+  elif [ "${CA_DN_QUALIFIER}" != "" ] && [ "${CERT_DN_QUALIFIER}" = "" ] && [ ${FALLBACK_OPTIONS} -eq 1 ]; then
+    CERT_DN_QUALIFIER="${CA_DN_QUALIFIER}"
+    info "CERT_DN_QUALIFIER defined from CA_DN_QUALIFIER (${CA_DN_QUALIFIER})."
+  fi
+
+  if [ "${CA_SERIAL}" = "" ] && [ "${CERT_SERIAL}" != "" ] && [ ${FALLBACK_OPTIONS} -eq 1 ]; then
+    CA_SERIAL="${CERT_SERIAL}"
+    info "CA_SERIAL defined from CERT_SERIAL (${CERT_SERIAL})."
+  elif [ "${CA_SERIAL}" != "" ] && [ "${CERT_SERIAL}" = "" ] && [ ${FALLBACK_OPTIONS} -eq 1 ]; then
+    CERT_SERIAL="${CA_SERIAL}"
+    info "CERT_SERIAL defined from CA_SERIAL (${CA_SERIAL})."
+  fi
+
+  if [ "${CA_TITLE}" = "" ] && [ "${CERT_TITLE}" != "" ] && [ ${FALLBACK_OPTIONS} -eq 1 ]; then
+    CA_TITLE="${CERT_TITLE}"
+    info "CA_TITLE defined from CERT_TITLE (${CERT_TITLE})."
+  elif [ "${CA_TITLE}" != "" ] && [ "${CERT_TITLE}" = "" ] && [ ${FALLBACK_OPTIONS} -eq 1 ]; then
+    CERT_TITLE="${CA_TITLE}"
+    info "CERT_TITLE defined from CA_TITLE (${CA_TITLE})."
+  fi
+
+  if [ "${CA_SURNAME}" = "" ] && [ "${CERT_SURNAME}" != "" ] && [ ${FALLBACK_OPTIONS} -eq 1 ]; then
+    CA_SURNAME="${CERT_SURNAME}"
+    info "CA_SURNAME defined from CERT_SURNAME (${CERT_SURNAME})."
+  elif [ "${CA_SURNAME}" != "" ] && [ "${CERT_SURNAME}" = "" ] && [ ${FALLBACK_OPTIONS} -eq 1 ]; then
+    CERT_SURNAME="${CA_SURNAME}"
+    info "CERT_SURNAME defined from CA_SURNAME (${CA_SURNAME})."
+  fi
+
+  if [ "${CA_GIVEN_NAME}" = "" ] && [ "${CERT_GIVEN_NAME}" != "" ] && [ ${FALLBACK_OPTIONS} -eq 1 ]; then
+    CA_GIVEN_NAME="${CERT_GIVEN_NAME}"
+    info "CA_GIVEN_NAME defined from CERT_GIVEN_NAME (${CERT_GIVEN_NAME})."
+  elif [ "${CA_GIVEN_NAME}" != "" ] && [ "${CERT_GIVEN_NAME}" = "" ] && [ ${FALLBACK_OPTIONS} -eq 1 ]; then
+    CERT_GIVEN_NAME="${CA_GIVEN_NAME}"
+    info "CERT_GIVEN_NAME defined from CA_GIVEN_NAME (${CA_GIVEN_NAME})."
+  fi
+
+  if [ "${CA_INITIALS}" = "" ] && [ "${CERT_INITIALS}" != "" ] && [ ${FALLBACK_OPTIONS} -eq 1 ]; then
+    CA_INITIALS="${CERT_INITIALS}"
+    info "CA_INITIALS defined from CERT_INITIALS (${CERT_INITIALS})."
+  elif [ "${CA_INITIALS}" != "" ] && [ "${CERT_INITIALS}" = "" ] && [ ${FALLBACK_OPTIONS} -eq 1 ]; then
+    CERT_INITIALS="${CA_INITIALS}"
+    info "CERT_INITIALS defined from CA_INITIALS (${CA_INITIALS})."
+  fi
+
+  if [ "${CA_PSEUDONYM}" = "" ] && [ "${CERT_PSEUDONYM}" != "" ] && [ ${FALLBACK_OPTIONS} -eq 1 ]; then
+    CA_PSEUDONYM="${CERT_PSEUDONYM}"
+    info "CA_PSEUDONYM defined from CERT_PSEUDONYM (${CERT_PSEUDONYM})."
+  elif [ "${CA_PSEUDONYM}" != "" ] && [ "${CERT_PSEUDONYM}" = "" ] && [ ${FALLBACK_OPTIONS} -eq 1 ]; then
+    CERT_PSEUDONYM="${CA_PSEUDONYM}"
+    info "CERT_PSEUDONYM defined from CA_PSEUDONYM (${CA_PSEUDONYM})."
+  fi
+
+  if [ "${CA_GENERATION_QUALIFIER}" = "" ] && [ "${CERT_GENERATION_QUALIFIER}" != "" ] && [ ${FALLBACK_OPTIONS} -eq 1 ]; then
+    CA_GENERATION_QUALIFIER="${CERT_GENERATION_QUALIFIER}"
+    info "CA_GENERATION_QUALIFIER defined from CERT_GENERATION_QUALIFIER (${CERT_GENERATION_QUALIFIER})."
+  elif [ "${CA_GENERATION_QUALIFIER}" != "" ] && [ "${CERT_GENERATION_QUALIFIER}" = "" ] && [ ${FALLBACK_OPTIONS} -eq 1 ]; then
+    CERT_GENERATION_QUALIFIER="${CA_GENERATION_QUALIFIER}"
+    info "CERT_GENERATION_QUALIFIER defined from CA_GENERATION_QUALIFIER (${CA_GENERATION_QUALIFIER})."
+  fi
+}
+
+#######################################
+# Generate CA certificates based on global variables.
+# Globals:
+#   CERTS_DIR
+#   CA_COUNTRY
+#   CA_STATE
+#   CA_LOCALITY
+#   CA_ORGANIZATION
+#   CA_ORGANIZATIONAL_UNIT
+#   CA_EMAIL
+#   CA_COMMON_NAME
+#   CA_DN_QUALIFIER
+#   CA_SERIAL
+#   CA_TITLE
+#   CA_SURNAME
+#   CA_GIVEN_NAME
+#   CA_INITIALS
+#   CA_PSEUDONYM
+#   CA_GENERATION_QUALIFIER
+# Arguments:
+#   None
+# Outputs:
+#   Logs (info/success/error)
+#   CA certificate files
+#######################################
+function generate_ca() {
+  ca_subject=""
+  if [ "${CA_COUNTRY}" != "" ]; then ca_subject="${ca_subject}/C=${CA_COUNTRY}"; fi
+  if [ "${CA_STATE}" != "" ]; then ca_subject="${ca_subject}/ST=${CA_STATE}"; fi
+  if [ "${CA_LOCALITY}" != "" ]; then ca_subject="${ca_subject}/L=${CA_LOCALITY}"; fi
+  if [ "${CA_ORGANIZATION}" != "" ]; then ca_subject="${ca_subject}/O=${CA_ORGANIZATION}"; fi
+  if [ "${CA_ORGANIZATIONAL_UNIT}" != "" ]; then ca_subject="${ca_subject}/OU=${CA_ORGANIZATIONAL_UNIT}"; fi
+  if [ "${CA_EMAIL}" != "" ]; then ca_subject="${ca_subject}/emailAddress=${CA_EMAIL}"; fi
+  if [ "${CA_COMMON_NAME}" != "" ]; then ca_subject="${ca_subject}/CN=${CA_COMMON_NAME}"; fi
+  if [ "${CA_DN_QUALIFIER}" != "" ]; then ca_subject="${ca_subject}/dnQualifier=${CA_DN_QUALIFIER}"; fi
+  if [ "${CA_SERIAL}" != "" ]; then ca_subject="${ca_subject}/serialNumber=${CA_SERIAL}"; fi
+  if [ "${CA_TITLE}" != "" ]; then ca_subject="${ca_subject}/title=${CA_TITLE}"; fi
+  if [ "${CA_SURNAME}" != "" ]; then ca_subject="${ca_subject}/SN=${CA_SURNAME}"; fi
+  if [ "${CA_GIVEN_NAME}" != "" ]; then ca_subject="${ca_subject}/GN=${CA_GIVEN_NAME}"; fi
+  if [ "${CA_INITIALS}" != "" ]; then ca_subject="${ca_subject}/initials=${CA_INITIALS}"; fi
+  if [ "${CA_PSEUDONYM}" != "" ]; then ca_subject="${ca_subject}/pseudonym=${CA_PSEUDONYM}"; fi
+  if [ "${CA_GENERATION_QUALIFIER}" != "" ]; then ca_subject="${ca_subject}/generationQualifier=${CA_GENERATION_QUALIFIER}"; fi
+  
+  CA_EXPIRACY="${CA_DURATION}"
+
+  info "Generating new Certification Authority certificates..."
+
+  openssl req -x509 -nodes -new -sha256 -days ${CA_DURATION} -newkey rsa:2048 \
+    -keyout ${CERTS_DIR}/RootCA.key \
+    -out ${CERTS_DIR}/RootCA.pem \
+    -subj "${ca_subject}"
+  ca_pem_success="${?}"
+
+  openssl x509 -outform pem -in ${CERTS_DIR}/RootCA.pem -out ${CERTS_DIR}/RootCA.crt
+  ca_crt_success="${?}"
+
+  if [ "${ca_pem_success}" = "0" ] && [ "${ca_crt_success}" = "0" ]; then
+    success "Certification Authority certificates successfully generated!"
+  else
+    err "An error occured during CA certificates generation"
+  fi
+}
+
+#######################################
+# Prepare given domain certificates (gether informations) based on global variables.
+# Globals:
+#   CERTS_DIR
+#   CERT_COUNTRY
+#   CERT_STATE
+#   CERT_LOCALITY
+#   CERT_ORGANIZATION
+#   CERT_ORGANIZATIONAL_UNIT
+#   CERT_EMAIL
+#   CERT_COMMON_NAME
+#   CERT_DN_QUALIFIER
+#   CERT_SERIAL
+#   CERT_TITLE
+#   CERT_SURNAME
+#   CERT_GIVEN_NAME
+#   CERT_INITIALS
+#   CERT_PSEUDONYM
+#   CERT_GENERATION_QUALIFIER
+#   _COUNTRY
+#   _STATE
+#   _LOCALITY
+#   _ORGANIZATION
+#   _ORGANIZATIONAL_UNIT
+#   _EMAIL
+#   _COMMON_NAME
+#   _DN_QUALIFIER
+#   _SERIAL
+#   _TITLE
+#   _SURNAME
+#   _GIVEN_NAME
+#   _INITIALS
+#   _PSEUDONYM
+#   _GENERATION_QUALIFIER
+# Arguments:
+#   Type of subject to parse (ca/cert)
+#   Subject as a string
+# Outputs:
+#   None
+#######################################
+function prepare_cert() {
+  given_domain_raw="${1}"
+  given_domain=$(echo ${given_domain_raw} | sed 's/[&\|?].*//')
+  domain_overrides=$(echo ${given_domain_raw} | sed "s/${given_domain}//")
+
+  # Create .ext file
+  echo -n "authorityKeyIdentifier=keyid,issuer
+basicConstraints=CA:FALSE
+keyUsage = digitalSignature, nonRepudiation, keyEncipherment, dataEncipherment
+subjectAltName = @alt_names
+[alt_names]
+IP.1 = 0.0.0.0
+DNS.1 = ${given_domain}
+" > ${CERTS_DIR}/extfile.ext
+
+  if [ "${WILDCARD}" = "1" ] && [ "$(echo ${domain_overrides} | grep "[&\|?]wcard=0")" = "" ]; then
+        echo "DNS.2 = *.${given_domain}" >> ${CERTS_DIR}/extfile.ext
+  elif [ "${WILDCARD}" = "0" ] && [ "$(echo ${domain_overrides} | grep "[&\|?]wcard=1")" != "" ]; then
+      echo "DNS.2 = *.${given_domain}" >> ${CERTS_DIR}/extfile.ext
+  fi
+
+  if [ -f "${CERTS_DIR}/${given_domain}.crt" ]; then
+    parse_subject cert "$(openssl x509 -in ${CERTS_DIR}/${given_domain}.crt -noout -subject)"
+  elif [ -f "${CERTS_DIR}/${given_domain}.crt" ] && [ ! -f "${CERTS_DIR}/${given_domain}.key" ]; then
+    warn "${given_domain}.crt exists but ${given_domain}.key don't, certificates for this domain will be regenerated"
+  elif [ ! -f "${CERTS_DIR}/${given_domain}.crt" ] && [ -f "${CERTS_DIR}/${given_domain}.key" ]; then
+    warn "${given_domain}.key exists but ${given_domain}.crt don't, certificates for this domain will be regenerated"
+  fi
+
+  _COUNTRY=$(echo ${domain_overrides} | grep 'C=' | sed 's/.*C=//' | sed 's/[&\|?].*//')
+  _STATE=$(echo ${domain_overrides} | grep 'ST=' | sed 's/.*ST=//' | sed 's/[&\|?].*//')
+  _LOCALITY=$(echo ${domain_overrides} | grep 'L=' | sed 's/.*L=//' | sed 's/[&\|?].*//')
+  _ORGANIZATION=$(echo ${domain_overrides} | grep 'O=' | sed 's/.*O=//' | sed 's/[&\|?].*//')
+  _ORGANIZATIONAL_UNIT=$(echo ${domain_overrides} | grep 'OU=' | sed 's/.*OU=//' | sed 's/[&\|?].*//')
+  _EMAIL=$(echo ${domain_overrides} | grep 'emailAddress=' | sed 's/.*emailAddress=//' | sed 's/[&\|?].*//')
+  _COMMON_NAME=$(echo ${domain_overrides} | grep 'CN=' | sed 's/.*CN=//' | sed 's/[&\|?].*//')
+  _DN_QUALIFIER=$(echo ${domain_overrides} | grep 'dnQualifier=' | sed 's/.*dnQualifier=//' | sed 's/[&\|?].*//')
+  _SERIAL=$(echo ${domain_overrides} | grep 'serialNumber=' | sed 's/.*serialNumber=//' | sed 's/[&\|?].*//')
+  _TITLE=$(echo ${domain_overrides} | grep 'title=' | sed 's/.*title=//' | sed 's/[&\|?].*//')
+  _SURNAME=$(echo ${domain_overrides} | grep 'SN=' | sed 's/.*SN=//' | sed 's/[&\|?].*//')
+  _GIVEN_NAME=$(echo ${domain_overrides} | grep 'GN=' | sed 's/.*GN=//' | sed 's/[&\|?].*//')
+  _INITIALS=$(echo ${domain_overrides} | grep 'initials=' | sed 's/.*initials=//' | sed 's/[&\|?].*//')
+  _PSEUDONYM=$(echo ${domain_overrides} | grep 'pseudonym=' | sed 's/.*pseudonym=//' | sed 's/[&\|?].*//')
+  _GENERATION_QUALIFIER=$(echo ${domain_overrides} | grep 'generationQualifier=' | sed 's/.*generationQualifier=//' | sed 's/[&\|?].*//')
+
+  refresh_cert_subject
+
+  if [ -f "${CERTS_DIR}/${given_domain}.crt" ]; then
+    cert_expiracy_date=$(date -d "$(openssl x509 -enddate -noout -in ${CERTS_DIR}/${given_domain}.crt | sed "s/notAfter=//")" +%s)
+    CERT_EXPIRACY=$(((cert_expiracy_date-DATE_NOW)/86400))
+    if [ ${CERT_EXPIRACY} -lt 1 ]; then
+      generate_cert
+    elif [ ${FORCE_CERTS_RENEWAL} -eq 1 ]; then
+      generate_cert
+    elif [ ${CERT_EXPIRACY} -lt 30 ]; then
+      warn "Certificates for ${given_domain} will expire in less than 30 days, renew them now with \"FORCE_CERTS_RENEWAL=1\" (env) or \"--force-cert-renewal\" (cli) options"
+    fi
+  else
+    generate_cert
+  fi
+
+  info "Here follows ${given_domain} certificates informations"
+  if [ ${VERBOSE} -eq 1 ]; then
+    echo "
+DOMAIN: ${given_domain}
+
+                                   Country (C): ${CERT_COUNTRY}
+                                    State (ST): ${CERT_STATE}
+                                  Locality (L): ${CERT_LOCALITY}
+                              Organization (O): ${CERT_ORGANIZATION}
+                      Organizational Unit (OU): ${CERT_ORGANIZATIONAL_UNIT}
+                          Email (emailAddress): ${CERT_EMAIL}
+                              Common name (CN): ${CERT_COMMON_NAME}
+    Distinguished name qualifier (dnQualifier): ${CERT_DN_QUALIFIER}
+                  Serial number (serialNumber): ${CERT_SERIAL}
+                                 Title (title): ${CERT_TITLE}
+                                  Surname (SN): ${CERT_SURNAME}
+                               Given name (GN): ${CERT_GIVEN_NAME}
+                           Initials (initials): ${CERT_INITIALS}
+                         Pseudonym (pseudonym): ${CERT_PSEUDONYM}
+    Generation qualifier (generationQualifier): ${CERT_GENERATION_QUALIFIER}
+                                    Expires in: ${CERT_EXPIRACY} days
+
+    "
+  fi
+}
+
+function generate_cert() {
+  cert_subject=""
+  if [ "${CERT_COUNTRY}" != "" ]; then cert_subject="${cert_subject}/C=${CERT_COUNTRY}"; fi
+  if [ "${CERT_STATE}" != "" ]; then cert_subject="${cert_subject}/ST=${CERT_STATE}"; fi
+  if [ "${CERT_LOCALITY}" != "" ]; then cert_subject="${cert_subject}/L=${CERT_LOCALITY}"; fi
+  if [ "${CERT_ORGANIZATION}" != "" ]; then cert_subject="${cert_subject}/O=${CERT_ORGANIZATION}"; fi
+  if [ "${CERT_ORGANIZATIONAL_UNIT}" != "" ]; then cert_subject="${cert_subject}/OU=${CERT_ORGANIZATIONAL_UNIT}"; fi
+  if [ "${CERT_EMAIL}" != "" ]; then cert_subject="${cert_subject}/emailAddress=${CERT_EMAIL}"; fi
+  if [ "${CERT_COMMON_NAME}" != "" ]; then cert_subject="${cert_subject}/CN=${CERT_COMMON_NAME}"; fi
+  if [ "${CERT_DN_QUALIFIER}" != "" ]; then cert_subject="${cert_subject}/dnQualifier=${CERT_DN_QUALIFIER}"; fi
+  if [ "${CERT_SERIAL}" != "" ]; then cert_subject="${cert_subject}/serialNumber=${CERT_SERIAL}"; fi
+  if [ "${CERT_TITLE}" != "" ]; then cert_subject="${cert_subject}/title=${CERT_TITLE}"; fi
+  if [ "${CERT_SURNAME}" != "" ]; then cert_subject="${cert_subject}/SN=${CERT_SURNAME}"; fi
+  if [ "${CERT_GIVEN_NAME}" != "" ]; then cert_subject="${cert_subject}/GN=${CERT_GIVEN_NAME}"; fi
+  if [ "${CERT_INITIALS}" != "" ]; then cert_subject="${cert_subject}/initials=${CERT_INITIALS}"; fi
+  if [ "${CERT_PSEUDONYM}" != "" ]; then cert_subject="${cert_subject}/pseudonym=${CERT_PSEUDONYM}"; fi
+  if [ "${CERT_GENERATION_QUALIFIER}" != "" ]; then cert_subject="${cert_subject}/generationQualifier=${CERT_GENERATION_QUALIFIER}"; fi
+
+  CERT_EXPIRACY="${CERT_DURATION}"
+
+  info "Generating certificates for ${given_domain}..."
+
+  openssl req -config /etc/ssl/openssl.cnf -new -nodes -newkey rsa:2048 \
+    -keyout ${CERTS_DIR}/${given_domain}.key \
+    -out ${CERTS_DIR}/cert.csr \
+    -subj "${cert_subject}"
+  cert_csr_success="${?}"
+
+  openssl x509 -req -sha256 -days ${CERT_DURATION} \
+    -in ${CERTS_DIR}/cert.csr \
+    -CA ${CERTS_DIR}/RootCA.crt \
+    -CAkey ${CERTS_DIR}/RootCA.key \
+    -CAcreateserial \
+    -extfile ${CERTS_DIR}/extfile.ext \
+    -out ${CERTS_DIR}/${given_domain}.crt
+  cert_crt_success="${?}"
+
+  if [ "${cert_csr_success}" = "0" ] && [ "${cert_crt_success}" = "0" ]; then
+    success "Certificates for ${given_domain} successfully generated!"
+  else
+    err "An error occured during ${given_domain}'s certificates generation"
+  fi
+}
+
+# CLI args parsing (sourced from: https://stackoverflow.com/a/9899366)
+while test $# -gt 0
+do
+  case $1 in
+    # Options
+    -h | --help) echo "${HELP}" ; exit 0 ;;
+    -v | --version) echo "${VERSION}" ; exit 0 ;;
+    -a | --domain) DOMAIN="${2}" ; shift ;;
+    -w | --no-wilcard) WILDCARD=0 ;;
+    -y | --no-self-signed-ca) SELF_SIGNED_CA=0 ;;
+    -x | --no-provided-ca) PROVIDED_CA=0 ;;
+    -u | --basic-certs) BASIC_CERTS=1 ;;
+    -M | --ca-duration) CA_DURATION="${2}" ; shift ;;
+    -m | --cert-duration) CERT_DURATION="${2}" ; shift ;;
+    -U | --no-fallback-options) FALLBACK_OPTIONS=0 ;;
+    -V | --verbose) VERBOSE=1 ;;
+    -K | --force-ca-renewal) FORCE_CA_RENEWAL=1 ;;
+    -Y | --force-cert-renewal) FORCE_CERT_RENEWAL=1 ;;
+    -X | --force-renewal) FORCE_RENEWAL=1 ;;
+    # CA subject options
+    -Z | --ca-subject) CA_SUBJECT="${2}" ; shift ;;
+    -C | --ca-country) CA_COUNTRY="${2}" ; shift ;;
+    -S | --ca-state) CA_STATE="${2}" ; shift ;;
+    -L | --ca-locality) CA_LOCALITY="${2}" ; shift ;;
+    -O | --ca-organization) CA_ORGANIZATION="${2}" ; shift ;;
+    -N | --ca-organizational-unit) CA_ORGANIZATIONAL_UNIT="${2}" ; shift ;;
+    -E | --ca-email) CA_EMAIL="${2}" ; shift ;;
+    -B | --ca-common-name) CA_COMMON_NAME="${2}" ; shift ;;
+    -D | --ca-dn-qualifier) CA_DN_QUALIFIER="${2}" ; shift ;;
+    -R | --ca-serial) CA_SERIAL="${2}" ; shift ;;
+    -T | --ca-title) CA_TITLE="${2}" ; shift ;;
+    -Q | --ca-surname) CA_SURNAME="${2}" ; shift ;;
+    -G | --ca-given-name) CA_GIVEN_NAME="${2}" ; shift ;;
+    -I | --ca-initials) CA_INITIALS="${2}" ; shift ;;
+    -P | --ca-pseudonym) CA_PSEUDONYM="${2}" ; shift ;;
+    -F | --ca-generation-qualifier) CA_GENERATION_QUALIFIER="${2}" ; shift ;;
+    # Certificates subject options
+    -z | --cert-subject) CERT_SUBJECT="${2}" ; shift ;;
+    -c | --cert-country) CERT_COUNTRY="${2}" ; shift ;;
+    -s | --cert-state) CERT_STATE="${2}" ; shift ;;
+    -l | --cert-locality) CERT_LOCALITY="${2}" ; shift ;;
+    -o | --cert-organization) CERT_ORGANIZATION="${2}" ; shift ;;
+    -n | --cert-organizational-unit) CERT_ORGANIZATIONAL_UNIT="${2}" ; shift ;;
+    -e | --cert-email) CERT_EMAIL="${2}" ; shift ;;
+    -b | --cert-common-name) CERT_COMMON_NAME="${2}" ; shift ;;
+    -d | --cert-dn-qualifier) CERT_DN_QUALIFIER="${2}" ; shift ;;
+    -r | --cert-serial) CERT_SERIAL="${2}" ; shift ;;
+    -t | --cert-title) CERT_TITLE="${2}" ; shift ;;
+    -q | --cert-surname) CERT_SURNAME="${2}" ; shift ;;
+    -g | --cert-given-name) CERT_GIVEN_NAME="${2}" ; shift ;;
+    -i | --cert-initials) CERT_INITIALS="${2}" ; shift ;;
+    -p | --cert-pseudonym) CERT_PSEUDONYM="${2}" ; shift ;;
+    -f | --cert-generation-qualifier) CERT_GENERATION_QUALIFIER="${2}" ; shift ;;
+    # Options processing
+    --) break ;;
+    --* | -?) err "unknown option \"${1}\", see \"Usage\" (--help)" ;;
+    -*)
+      split=$1
+      shift
+      set -- $(echo "$split" | cut -c 2- | sed 's/./-& /g') "$@"
+      continue
+      ;;
+    *) break ;;
+  esac
+  shift
+done
+
+# VERBOSE will display extra informations
+if [ "${VERBOSE}" = "0" ] || [ "${VERBOSE}" = "false" ] || [ "${VERBOSE}" = "" ]; then
+  VERBOSE=0
+elif [ "${VERBOSE}" = "1" ] || [ "${VERBOSE}" = "true" ]; then
+  VERBOSE=1
+  echo "
+ a88888b.  88888888b  888888ba  d888888P                
+d8'   \`88  88         88    \`8b    88                   
+88        a88aaaa    a88aaaa8P'    88                   
+88         88         88   \`8b.    88                   
+Y8.   .88  88         88     88    88                   
+ Y88888P'  88888888P  dP     dP    dP                   
+                                                        
+                                                        
+8888ba.88ba   .d888888  dP     dP  88888888b  888888ba  
+88  \`8b  \`8b d8'    88  88   .d8'  88         88    \`8b 
+88   88   88 88aaaaa88a 88aaa8P'  a88aaaa    a88aaaa8P' 
+88   88   88 88     88  88   \`8b.  88         88   \`8b. 
+88   88   88 88     88  88     88  88         88     88 
+dP   dP   dP 88     88  dP     dP  88888888P  dP     dP 
+
+${VERSION}
+"
+  info "Verbose mode is enabled, everything will be logged"
+else
+  err "VERBOSE can only be set to \"true\", \"false\", \"1\" or \"0\""
+fi
+
+# SELF_SIGNED_CA will generate CA and domains certificates
+if [ "${SELF_SIGNED_CA}" = "0" ] || [ "${SELF_SIGNED_CA}" = "false" ]; then
+  SELF_SIGNED_CA=0
+elif [ "${SELF_SIGNED_CA}" = "1" ] || [ "${SELF_SIGNED_CA}" = "true" ] || [ "${SELF_SIGNED_CA}" = "" ]; then
+  if [ "${SELF_SIGNED_CA}" = "" ]; then
+    info "Using default value (1/true) for SELF_SIGNED_CA setting"
+  fi
+  SELF_SIGNED_CA=1
+else
+  err "SELF_SIGNED_CA can only be set to \"true\", \"false\", \"1\" or \"0\""
+fi
+
+# PROVIDED_CA will generate given domains certificates based on an existing CA certificate
+if [ "${PROVIDED_CA}" = "0" ] || [ "${PROVIDED_CA}" = "false" ]; then
+  PROVIDED_CA=0
+elif [ "${PROVIDED_CA}" = "1" ] || [ "${PROVIDED_CA}" = "true" ] || [ "${PROVIDED_CA}" = "" ]; then
+  if [ "${PROVIDED_CA}" = "" ]; then
+    info "Using default value (1/true) for PROVIDED_CA setting"
+  fi
+  PROVIDED_CA=1
+else
+  err "PROVIDED_CA can only be set to \"true\", \"false\", \"1\" or \"0\""
+fi
+
+# BASIC_CERT will only generate a self signed certificate for all given domains
+if [ "${BASIC_CERTS}" = "0" ] || [ "${BASIC_CERTS}" = "false" ] || [ "${BASIC_CERTS}" = "" ]; then
+  if [ "${BASIC_CERTS}" = "" ]; then
+    info "Using default value (0/false) for BASIC_CERTS setting"
+  fi
+  BASIC_CERTS=0
+elif [ "${BASIC_CERTS}" = "1" ] || [ "${BASIC_CERTS}" = "true" ]; then
+  BASIC_CERTS=1
+else
+  err "BASIC_CERTS can only be set to \"true\", \"false\", \"1\" or \"0\""
+fi
+
+# FORCE_CA_RENEWAL will force Certification Authority certificates renewal
+if [ "${FORCE_CA_RENEWAL}" = "0" ] || [ "${FORCE_CA_RENEWAL}" = "false" ] || [ "${FORCE_CA_RENEWAL}" = "" ]; then
+  if [ "${FORCE_CA_RENEWAL}" = "" ]; then
+    info "Using default value (0/false) for FORCE_CA_RENEWAL setting"
+  fi
+  FORCE_CA_RENEWAL=0
+elif [ "${FORCE_CA_RENEWAL}" = "1" ] || [ "${FORCE_CA_RENEWAL}" = "true" ]; then
+  FORCE_CA_RENEWAL=1
+else
+  err "FORCE_CA_RENEWAL can only be set to \"true\", \"false\", \"1\" or \"0\""
+fi
+
+# FORCE_CERT_RENEWAL will force certificates renewal
+if [ "${FORCE_CERT_RENEWAL}" = "0" ] || [ "${FORCE_CERT_RENEWAL}" = "false" ] || [ "${FORCE_CERT_RENEWAL}" = "" ]; then
+  if [ "${FORCE_CERT_RENEWAL}" = "" ]; then
+    info "Using default value (0/false) for FORCE_CERT_RENEWAL setting"
+  fi
+  FORCE_CERT_RENEWAL=0
+elif [ "${FORCE_CERT_RENEWAL}" = "1" ] || [ "${FORCE_CERT_RENEWAL}" = "true" ]; then
+  FORCE_CERT_RENEWAL=1
+else
+  err "FORCE_CERT_RENEWAL can only be set to \"true\", \"false\", \"1\" or \"0\""
+fi
+
+# FORCE_RENEWAL will force CA and domain certificates renewal
+if [ "${FORCE_RENEWAL}" = "0" ] || [ "${FORCE_RENEWAL}" = "false" ] || [ "${FORCE_RENEWAL}" = "" ]; then
+  if [ "${FORCE_RENEWAL}" = "" ]; then
+    info "Using default value (0/false) for FORCE_CERT_RENEWAL setting"
+  fi
+  FORCE_RENEWAL=0
+elif [ "${FORCE_RENEWAL}" = "1" ] || [ "${FORCE_RENEWAL}" = "true" ]; then
+  FORCE_RENEWAL=1
+else
+  err "FORCE_RENEWAL can only be set to \"true\", \"false\", \"1\" or \"0\""
+fi
+
+# Exit script on conflicting PROVIDED_CA and BASIC_CERTS settings
+if [ ${PROVIDED_CA} -eq 1 ] && [ ${BASIC_CERTS} -eq 1 ]; then
+  err "PROVIDED_CA and BASIC_CERTS are conflicting and can't be enabled together"
+fi
+
+# WILDCARD will append a wildcard to each generated certificates for the given domain
+if [ "${WILDCARD}" = "0" ] || [ "${WILDCARD}" = "false" ]; then
+  WILDCARD=0
+elif [ "${WILDCARD}" = "1" ] || [ "${WILDCARD}" = "true" ] || [ "${WILDCARD}" = "" ]; then
+  if [ "${WILDCARD}" = "" ]; then
+    info "Using default value (1/true) for WILDCARD setting"
+  fi
+  WILDCARD=1
+else
+  err "WILDCARD can only be set to \"true\", \"false\", \"1\" or \"0\""
+fi
+
+# FALLBACK_OPTIONS will use settings from CA/Cert over Cert/CA if missing in order to get the most informations in each subjects
+if [ "${FALLBACK_OPTIONS}" = "0" ] || [ "${FALLBACK_OPTIONS}" = "false" ]; then
+  FALLBACK_OPTIONS=0
+elif [ "${FALLBACK_OPTIONS}" = "1" ] || [ "${FALLBACK_OPTIONS}" = "true" ] || [ "${FALLBACK_OPTIONS}" = "" ]; then
+  if [ "${FALLBACK_OPTIONS}" = "" ]; then
+    info "Using default value (1/true) for FALLBACK_OPTIONS setting"
+  fi
+  FALLBACK_OPTIONS=1
+else
+  err "FALLBACK_OPTIONS can only be set to \"true\", \"false\", \"1\" or \"0\""
+fi
+
+CERTS_DIR="${CERTS_DIR:-/certs}"
+if [ ! -d "${CERTS_DIR}" ]; then
+  err "Specified CERTS_DIR (${CERTS_DIR}) does not exists"
+fi
+
+if [ "${DOMAIN}" = "" ]; then
+  DOMAIN="dev.local"
+fi
+
+if [ "${CA_DURATION}" = "" ] && [ ${BASIC_CERTS} -eq 0 ]; then
+  CA_DURATION=7300
+  info "Using default value (7300) for CA duration before expiracy (in days, 20 years in total)"
+fi
+
+if [ "${CERT_DURATION}" = "" ]; then
+  CERT_DURATION=397
+  info "Using default value (387) for certificates duration before expiracy (in days)"
+fi
+
+if [ "${CA_SUBJECT}" = "" ] && [ "${CERT_SUBJECT}" != "" ] && [ ${FALLBACK_OPTIONS} -eq 1]; then
+  CA_SUBJECT="${CERT_SUBJECT}"
+  info "CA_SUBJECT defined from CERT_SUBJECT (${CERT_SUBJECT})."
+elif [ "${CA_SUBJECT}" != "" ] && [ "${CERT_SUBJECT}" = "" ] && [ ${FALLBACK_OPTIONS} -eq 1]; then
+  CERT_SUBJECT="${CA_SUBJECT}"
+  info "CERT_SUBJECT defined from CA_SUBJECT (${CA_SUBJECT})."
+fi
+
+if [ "${CA_SUBJECT}" != "" ]; then
+  parse_subject ca "${CA_SUBJECT}"
+fi
+
+if [ "${CERT_SUBJECT}" != "" ]; then
+  parse_subject cert "${CERT_SUBJECT}"
+fi
+
+# If SELF_SIGNED_CA and/or PROVIDED_CA are enabled, extract CA informations from existing file (if any)
+if [ ${BASIC_CERTS} -eq 0 ]; then
+  if [ ${SELF_SIGNED_CA} -eq 1 ] || [ ${PROVIDED_CA} -eq 1 ]; then
+    if [ -f "${CERTS_DIR}/RootCA.crt" ] && [ -f "${CERTS_DIR}/RootCA.key" ]; then
+      parse_subject ca "$(openssl x509 -in ${CERTS_DIR}/RootCA.crt -noout -subject)"
+    # If PROVIDED_CA is set, SELF_SIGNED_CA is disabled and CA files are missing, throw an error
+    elif [ ${SELF_SIGNED_CA} -eq 0 ]; then
+      if [ ! -f "${CERTS_DIR}/RootCA.crt" ] && [ ! -f "${CERTS_DIR}/RootCA.key" ]; then
+        err "PROVIDED_CA is set, however RootCA.crt and RootCA.key are missing"
+      elif [ ! -f "${CERTS_DIR}/RootCA.crt" ]; then
+        err "PROVIDED_CA is set, however RootCA.crt is missing"
+      elif [ ! -f "${CERTS_DIR}/RootCA.key" ]; then
+        err "PROVIDED_CA is set, however RootCA.key is missing"
+      fi
+    elif [ ${SELF_SIGNED_CA} -eq 1 ]; then
+      if [ ! -f "${CERTS_DIR}/RootCA.crt" ] && [ ! -f "${CERTS_DIR}/RootCA.key" ]; then
+        info "RootCA.crt and RootCA.key are not present, Certification Authority certificates will be generated"
+      elif [ ! -f "${CERTS_DIR}/RootCA.crt" ] && [ -f "${CERTS_DIR}/RootCA.key" ]; then
+        warn "RootCA.key exists but RootCA.crt don't, Certification Authority certificates will be regenerated"
+      elif [ -f "${CERTS_DIR}/RootCA.crt" ] && [ ! -f "${CERTS_DIR}/RootCA.key" ]; then
+        warn "RootCA.crt exists but RootCA.key don't, Certification Authority certificates will be regenerated"
+        parse_subject ca "$(openssl x509 -in ${CERTS_DIR}/RootCA.crt -noout -subject)"
+      fi
+    fi
+  fi
+fi
+
+set_defaults
+
+CERT_COUNTRY_ORIG="${CERT_COUNTRY}"
+CERT_STATE_ORIG="${CERT_STATE}"
+CERT_LOCALITY_LOCALITY_ORIG="${CERT_LOCALITY}"
+CERT_ORGANIZATION_ORIG="${CERT_ORGANIZATION}"
+CERT_ORGANIZATIONAL_UNIT_ORIG="${CERT_ORGANIZATIONAL_UNIT}"
+CERT_EMAIL_ORIG="${CERT_EMAIL}"
+CERT_COMMON_NAME_ORIG="${CERT_COMMON_NAME}"
+CERT_DN_QUALIFIER_ORIG="${CERT_DN_QUALIFIER}"
+CERT_SERIAL_ORIG="${CERT_SERIAL}"
+CERT_TITLE_ORIG="${CERT_TITLE}"
+CERT_SURNAME_ORIG="${CERT_SURNAME}"
+CERT_GIVEN_NAME_ORIG="${CERT_GIVEN_NAME}"
+CERT_INITIALS_ORIG="${CERT_INITIALS}"
+CERT_PSEUDONYM_ORIG="${CERT_PSEUDONYM}"
+CERT_GENERATION_QUALIFIER_ORIG="${CERT_GENERATION_QUALIFIER}"
+
+DATE_NOW=$(($(date +%s)-86400))
+
+# Generate CA certificates if needed
+if [ ${BASIC_CERTS} -eq 0 ]; then
+  if [ ${SELF_SIGNED_CA} -eq 1 ] || [ ${PROVIDED_CA} -eq 1 ]; then
+    if [ -f "${CERTS_DIR}/RootCA.crt" ] && [ -f "${CERTS_DIR}/RootCA.key" ]; then
+      ca_expiracy_date=$(date -d "$(openssl x509 -enddate -noout -in ${CERTS_DIR}/RootCA.crt | sed "s/notAfter=//")" +%s)
+      CA_EXPIRACY=$(((ca_expiracy_date-DATE_NOW)/86400))
+      if [ ${CA_EXPIRACY} -lt 1 ]; then
+        if [ ${SELF_SIGNED_CA} -eq 0 ]; then
+          err "PROVIDED_CA is set, but the provided CA is expired"
+        else
+          info "Existing Certification Authority is expired, it will be renewed"
+          generate_ca
+        fi
+      elif [ ${FORCE_CA_RENEWAL} -eq 1 ] && [ ${SELF_SIGNED_CA} -eq 1 ]; then
+        info "Certification Authority renewal is forced, proceeding..."
+        generate_ca
+      elif [ ${CA_EXPIRACY} -lt 30 ]; then
+        warn "Certification Authority will expire in less than 30 days, renew it now with \"FORCE_CA_RENEWAL=1\" (env) or \"--force-ca-renewal\" (cli) options"
+      fi
+    elif [ ${SELF_SIGNED_CA} -eq 1 ]; then
+      generate_ca
+    fi
+
+    info "Here follows Certification Authority informations"
+    if [ ${VERBOSE} -eq 1 ]; then
+      echo "
+
+                                   Country (C): ${CA_COUNTRY}
+                                    State (ST): ${CA_STATE}
+                                  Locality (L): ${CA_LOCALITY}
+                              Organization (O): ${CA_ORGANIZATION}
+                      Organizational Unit (OU): ${CA_ORGANIZATIONAL_UNIT}
+                          Email (emailAddress): ${CA_EMAIL}
+                              Common name (CN): ${CA_COMMON_NAME}
+    Distinguished name qualifier (dnQualifier): ${CA_DN_QUALIFIER}
+                  Serial number (serialNumber): ${CA_SERIAL}
+                                 Title (title): ${CA_TITLE}
+                                  Surname (SN): ${CA_SURNAME}
+                               Given name (GN): ${CA_GIVEN_NAME}
+                           Initials (initials): ${CA_INITIALS}
+                         Pseudonym (pseudonym): ${CA_PSEUDONYM}
+    Generation qualifier (generationQualifier): ${CA_GENERATION_QUALIFIER}
+                                    Expires in: ${CA_EXPIRACY} days
+
+      "
+    fi
+  fi
+fi
+
+# Generate certificates
+if [ "$(echo "${DOMAIN}" | grep " ")" != "" ]; then
+    echo "${DOMAIN}" > domains.list
+    for domain in $(cat domains.list); do
+        prepare_cert ${domain}
+    done
+    rm -f ${CERTS_DIR}/domains.list
+else
+    prepare_cert ${DOMAIN}
+fi
+
+success "All done!"
+exit 0
