@@ -518,7 +518,7 @@ function generate_ca() {
 
   info "Generating new Certification Authority certificates..."
 
-  openssl req -x509 -nodes -new -sha256 -days ${CA_DURATION} -newkey rsa:2048 \
+  openssl req -x509 -nodes -new -sha256 -days ${CA_DURATION} -utf8 -newkey rsa:2048 \
     -keyout ${CERTS_DIR}/RootCA.key \
     -out ${CERTS_DIR}/RootCA.pem \
     -subj "${ca_subject}"
@@ -683,7 +683,7 @@ function generate_cert() {
 
   info "Generating certificates for ${given_domain}..."
 
-  openssl req -config /etc/ssl/openssl.cnf -new -nodes -newkey rsa:2048 \
+  openssl req -config /etc/ssl/openssl.cnf -new -nodes -utf8 -newkey rsa:2048 \
     -keyout ${CERTS_DIR}/${given_domain}.key \
     -out ${CERTS_DIR}/cert.csr \
     -subj "${cert_subject}"
