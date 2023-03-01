@@ -10,10 +10,10 @@ Usage:  certmaker [OPTIONS]
 Generate certificates with ease: signed by a self-signed/provided Certification Autoriy or basic (self-signed) certificates.
 
 Options:
-  -h, --help                  Print this menu and quit
+  -h, --help                   Print this menu and quit
   -v, --version                Print version information and quit
   -a, --domain string          Domain(s) to sign certificates for
-  -w, --no-wilcard             Disable wildcards globally for generated certificates
+  -w, --no-wildcard            Disable wildcards globally for generated certificates
   -y, --no-self-signed-ca      Disable self-signed CA
   -x, --no-provided-ca         Disable provided (non-generated) CA
   -u, --basic-certs            Enable basic certificates generation (not signed by a CA)
@@ -23,7 +23,7 @@ Options:
   -V, --verbose                Show verbose informations
   -K, --force-ca-renewal       Force CA renewal if available
   -Y, --force-cert-renewal     Force domain(s) certificates renewal if available
-  -X, --force-renewal      Force CA and domain(s) certificates renewal if available
+  -X, --force-renewal          Force CA and domain(s) certificates renewal if available
 
 Certification Authority (CA) subject options, superseeded by existing CA (if any):
   -Z, --ca-subject string                Complete subject (superseeded by individual settings)
@@ -73,10 +73,10 @@ For extended documentation, please head over https://github.com/Moukrea/certmake
 # Outputs:
 #   Writes information to stdout
 #######################################
-function info() {
+info() {
   msg="${1}"
   if [ ${VERBOSE} -eq 1 ]; then
-    echo -e "\e[36m[$(date +'%Y-%m-%dT%H:%M:%S%z')][INFO]  ${msg}\e[0m"
+    echo "\e[36m[$(date +'%Y-%m-%dT%H:%M:%S%z')][INFO]  ${msg}\e[0m"
   fi
 }
 
@@ -89,9 +89,9 @@ function info() {
 # Outputs:
 #   Writes success message to stdout
 #######################################
-function success() {
+success() {
   msg="${1}"
-  echo -e "\e[32m[$(date -u +'%Y-%m-%dT%H:%M:%S%z')][OK]    ${msg}\e[0m"
+  echo "\e[32m[$(date -u +'%Y-%m-%dT%H:%M:%S%z')][OK]    ${msg}\e[0m"
 }
 
 #######################################
@@ -103,9 +103,9 @@ function success() {
 # Outputs:
 #   Writes warning to stdout
 #######################################
-function warn() {
+warn() {
   msg="${1}"
-  echo -e "\e[33m[$(date +'%Y-%m-%dT%H:%M:%S%z')][WARN]  ${msg}\e[0m"
+  echo "\e[33m[$(date +'%Y-%m-%dT%H:%M:%S%z')][WARN]  ${msg}\e[0m"
 }
 
 #######################################
@@ -117,9 +117,9 @@ function warn() {
 # Outputs:
 #   Writes error message to stderr
 #######################################
-function err() {
+err() {
   msg="${1}"
-  echo -e "\e[31m[$(date -u +'%Y-%m-%dT%H:%M:%S%z')][ERROR] ${msg}, terminating...\e[0m"  >&2
+  echo "\e[31m[$(date -u +'%Y-%m-%dT%H:%M:%S%z')][ERROR] ${msg}, terminating...\e[0m"  >&2
   exit 1
 }
 
@@ -177,7 +177,7 @@ function err() {
 # Outputs:
 #   None
 #######################################
-function parse_subject() {
+parse_subject() {
   type="${1}"
   subject="${2}"
 
@@ -261,7 +261,7 @@ function parse_subject() {
 # Outputs:
 #   None
 #######################################
-function refresh_cert_subject() {
+refresh_cert_subject() {
   CERT_COUNTRY="${CERT_COUNTRY_ORIG}"
   CERT_STATE="${CERT_STATE_ORIG}"
   CERT_LOCALITY_LOCALITY="${CERT_LOCALITY_ORIG}"
@@ -334,7 +334,7 @@ function refresh_cert_subject() {
 # Outputs:
 #   Informations (logs) about variables definitions
 #######################################
-function set_defaults() {
+set_defaults() {
   # Handle CA_COUNTRY and CERT_COUNTRY (mandatory variables)
   if [ "${CA_COUNTRY}" = "" ] && [ "${CERT_COUNTRY}" = "" ]; then
     CA_COUNTRY="AU"
@@ -496,7 +496,7 @@ function set_defaults() {
 #   Logs (info/success/error)
 #   CA certificate files
 #######################################
-function generate_ca() {
+generate_ca() {
   ca_subject=""
   if [ "${CA_COUNTRY}" != "" ]; then ca_subject="${ca_subject}/C=${CA_COUNTRY}"; fi
   if [ "${CA_STATE}" != "" ]; then ca_subject="${ca_subject}/ST=${CA_STATE}"; fi
@@ -574,7 +574,7 @@ function generate_ca() {
 # Outputs:
 #   None
 #######################################
-function prepare_cert() {
+prepare_cert() {
   given_domain_raw="${1}"
   given_domain=$(echo ${given_domain_raw} | sed 's/[&\|?].*//')
   domain_overrides=$(echo ${given_domain_raw} | sed "s/${given_domain}//")
@@ -661,7 +661,7 @@ DOMAIN: ${given_domain}
   fi
 }
 
-function generate_cert() {
+generate_cert() {
   cert_subject=""
   if [ "${CERT_COUNTRY}" != "" ]; then cert_subject="${cert_subject}/C=${CERT_COUNTRY}"; fi
   if [ "${CERT_STATE}" != "" ]; then cert_subject="${cert_subject}/ST=${CERT_STATE}"; fi
@@ -713,7 +713,7 @@ do
     -h | --help) echo "${HELP}" ; exit 0 ;;
     -v | --version) echo "${VERSION}" ; exit 0 ;;
     -a | --domain) DOMAIN="${2}" ; shift ;;
-    -w | --no-wilcard) WILDCARD=0 ;;
+    -w | --no-wildcard) WILDCARD=0 ;;
     -y | --no-self-signed-ca) SELF_SIGNED_CA=0 ;;
     -x | --no-provided-ca) PROVIDED_CA=0 ;;
     -u | --basic-certs) BASIC_CERTS=1 ;;
